@@ -37,26 +37,71 @@ static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
 /* ----------------------------------------------------------------
  *		ExecHash
  *
- *		stub for pro forma compliance
+ *		Created ExecHash CSI 3130 Project Edit
+ *		This is a pipelined execution of hash. In addition the hash
+ *		value is not directly returned because it is not a subtype of
+ *		Node, and thus would violate MultiExecProcNode API. Instead the parent
+ *		Hashjoin is expected to be able to get it out of the node state.
  * ----------------------------------------------------------------
  */
-/*
-TupleTableSlot *
-ExecHash(HashState *node)
+
+TupleTableSlot*
+ExecHash(HashState* node)
 {
-	elog(ERROR, "Hash node does not support ExecProcNode call convention");
-	return NULL;
-}
-*/
-/*GB : begin*/
-Node *
-MultiExecHash(HashState *node)
-{
-	PlanState  *outerNode;
-	List	   *hashkeys;
+	PlanState* outerNode;
+	List* hashkeys;
 	HashJoinTable hashtable;
-	TupleTableSlot *slot;
-	ExprContext *econtext;
+	TupleTableSlot* slot;
+	ExprContext* econtext;
+	uint32		hashvalue;
+
+	if (node->ps.instrument)		// this if statement provides our own instrumentation support
+		InstrStartNode(node->ps.instrument);
+
+	outerNode = outerPlanState(node); 	// gets the outerNode state info from node 
+	hashtable = node->hashtable;		// gets the hast table state info from node
+
+	hashkeys = node->hashkeys;			//set expression context
+	econtext = node->ps.ps_ExprContext;
+
+	slot = ExecProcNode(outerNode);		//get all tuples to insert into table
+
+	if (!TupIsNull(slot)) 	//get one inner tuples and insert into the hash table (or temp files)
+	{
+		hashtable->totalTuples += 1;	//Compute the hash value
+		econtext->ecxt_innertuple = slot;
+		econtext->ecxt_outertuple = slot;
+		hashvalue = ExecHashGetHashValue(hashtable, econtext, hashkeys);
+		ExecHashTableInsert(hashtable, ExecFetchSlotTuple(slot), hashvalue);
+	}
+	else {
+
+		/* must provide our own instrumentation support */
+		if (node->ps.instrument)
+			InstrStopNodeMulti(node->ps.instrument, hashtable->totalTuples);
+		return NULL;
+	}
+
+	return slot;
+} //end of ExceHash (end of this CSI 3130 Edit) 
+
+
+
+ /* ----------------------------------------------------------------
+  *		MultiExecHash
+  *
+  *		build hash table for hashjoin, doing partitioning if more
+  *		than one batch is required.
+  * ----------------------------------------------------------------
+  */
+Node*
+MultiExecHash(HashState* node)
+{
+	PlanState* outerNode;
+	List* hashkeys;
+	HashJoinTable hashtable;
+	TupleTableSlot* slot;
+	ExprContext* econtext;
 	uint32		hashvalue;
 
 	/* must provide our own instrumentation support */
@@ -104,70 +149,7 @@ MultiExecHash(HashState *node)
 	return NULL;
 }
 
-/*GB : end */
 
-/* ----------------------------------------------------------------
- *		MultiExecHash
- *
- *		build hash table for hashjoin, doing partitioning if more
- *		than one batch is required.
- * ----------------------------------------------------------------
- */
-TupleTableSlot *
-ExecHash(HashState *node)
-{
-	PlanState  *outerNode;
-	List	   *hashkeys;
-	HashJoinTable hashtable;
-	TupleTableSlot *slot;
-	ExprContext *econtext;
-	uint32		hashvalue;
-
-	/* must provide our own instrumentation support */
-	if (node->ps.instrument)
-		InstrStartNode(node->ps.instrument);
-
-	/*
-	 * get state info from node
-	 */
-	outerNode = outerPlanState(node);
-	hashtable = node->hashtable;
-
-	/*
-	 * set expression context
-	 */
-	hashkeys = node->hashkeys;
-	econtext = node->ps.ps_ExprContext;
-
-	/*
-	 * get one inner tuples and insert into the hash table (or temp files)
-	 */
-	
-	slot = ExecProcNode(outerNode);
-	if (!TupIsNull(slot))
-	{
-		hashtable->totalTuples += 1;
-		/* We have to compute the hash value */
-		econtext->ecxt_innertuple = slot;
-		econtext->ecxt_outertuple = slot;	//in case of outer hash table
-		hashvalue = ExecHashGetHashValue(hashtable, econtext, hashkeys);
-		ExecHashTableInsert(hashtable, ExecFetchSlotTuple(slot), hashvalue);
-	}else{
-
-		/* must provide our own instrumentation support */
-		if (node->ps.instrument)
-			InstrStopNodeMulti(node->ps.instrument, hashtable->totalTuples);
-		return NULL;
-	}
-	/*
-	 * We do not return the hash table directly because it's not a subtype of
-	 * Node, and so would violate the MultiExecProcNode API.  Instead, our
-	 * parent Hashjoin node is expected to know how to fish it out of our node
-	 * state.  Ugly but not really worth cleaning up, since Hashjoin knows
-	 * quite a bit more about Hash besides that.
-	 */
-	return slot;
-}
 
 /* ----------------------------------------------------------------
  *		ExecInitHash
